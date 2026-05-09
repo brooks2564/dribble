@@ -58,6 +58,18 @@ static uint8_t hour_view = 0;
 static uint8_t page_view = VIEW_PAGE_CONDITIONS;
 static uint8_t active_page_view = VIEW_PAGE_NONE;  // Tracks which page's set_*_view(hour) is currently active.
 
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_FLINT) || defined(PBL_PLATFORM_GABBRO)
+#define PBL_TOUCHSCREEN
+#endif
+
+#ifdef PBL_TOUCHSCREEN
+// Touch gesture state
+#define TOUCH_SWIPE_THRESHOLD 30   // px vertical movement = hour scroll
+#define TOUCH_TAP_THRESHOLD   15   // px max movement to count as a tap
+static int16_t s_touch_start_x = 0;
+static int16_t s_touch_start_y = 0;
+#endif
+
 // Forward declarations
 static void update_view(uint8_t hour, uint8_t page);
 static void apply_page_content(uint8_t hour, uint8_t page);
@@ -375,6 +387,37 @@ static void prv_down_click_handler(ClickRecognizerRef recognizer, void *context)
   window_set_background_color(s_viewer_window, get_background_color_for_forecast(hour_view, page_view));
 }
 
+#ifdef PBL_TOUCHSCREEN
+static void prv_touch_handler(const TouchEvent *event, void *context) {
+  if (event->type == TouchEvent_Touchdown) {
+    s_touch_start_x = event->x;
+    s_touch_start_y = event->y;
+
+  } else if (event->type == TouchEvent_Liftoff) {
+    if (animations_enabled() && animation_is_busy()) return;
+
+    int16_t dx = event->x - s_touch_start_x;
+    int16_t dy = event->y - s_touch_start_y;
+    int16_t adx = dx < 0 ? -dx : dx;
+    int16_t ady = dy < 0 ? -dy : dy;
+
+    if (adx < TOUCH_TAP_THRESHOLD && ady < TOUCH_TAP_THRESHOLD) {
+      // Tap: cycle to next page (same as SELECT button)
+      prv_select_click_handler(NULL, NULL);
+    } else if (ady >= TOUCH_SWIPE_THRESHOLD && ady > adx) {
+      // Vertical swipe: scroll hours
+      if (dy < 0) {
+        // Swipe up = forward in time (DOWN button)
+        prv_down_click_handler(NULL, NULL);
+      } else {
+        // Swipe down = back in time (UP button)
+        prv_up_click_handler(NULL, NULL);
+      }
+    }
+  }
+}
+#endif
+
 static void prv_click_config_provider(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, prv_select_click_handler);
   // Up/down use repeating subscriptions so a held button fast-scrolls without
@@ -547,9 +590,16 @@ static void prv_window_load(Window *window) {
   }
 
   init_layers(window_layer);
+
+#ifdef PBL_TOUCHSCREEN
+  touch_service_subscribe(prv_touch_handler, NULL);
+#endif
 }
 
 static void prv_window_unload(Window *window) {
+#ifdef PBL_TOUCHSCREEN
+  touch_service_unsubscribe();
+#endif
   if(animations_enabled()) {
 #ifndef PBL_PLATFORM_APLITE
     background_animation_deinit();
